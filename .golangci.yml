@@ -32,6 +32,9 @@ linters:
 linters-settings:
   lll:
     line-length: 150
+  misspell:
+    ignore-words:
+      - autor
 
 issues:
   exclude-rules:
