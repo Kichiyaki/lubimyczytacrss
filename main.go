@@ -3,21 +3,17 @@ package main
 import (
 	"context"
 	"encoding/xml"
-	"fmt"
-	"github.com/PuerkitoBio/goquery"
-	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
-	"strings"
 	"time"
+
+	"github.com/Kichiyaki/lubimyczytacrss/internal"
 )
 
 const (
-	lubimyCzytacDomain = "lubimyczytac.pl"
-	defaultTimeout     = 5 * time.Second
+	defaultLubimyCzytacClientTimeout = 5 * time.Second
 )
 
 func main() {
@@ -50,20 +46,6 @@ func main() {
 	}
 }
 
-type rssMain struct {
-	XMLName xml.Name   `xml:"rss"`
-	Version string     `xml:"version,attr"`
-	Channel rssChannel `xml:"channel"`
-}
-
-type rssChannel struct {
-	XMLName     xml.Name  `xml:"channel"`
-	Link        string    `xml:"link"`
-	Description string    `xml:"description"`
-	Language    string    `xml:"language"`
-	Items       []rssItem `xml:"items"`
-}
-
 type rssItem struct {
 	XMLName     xml.Name `xml:"item"`
 	Title       string   `xml:"title"`
@@ -72,84 +54,67 @@ type rssItem struct {
 	Description string   `xml:"description"`
 }
 
-func newHandler() http.Handler {
-	client := &http.Client{
-		Timeout: defaultTimeout,
+type rssChannel struct {
+	XMLName     xml.Name  `xml:"channel"`
+	Title       string    `xml:"title"`
+	Link        string    `xml:"link"`
+	Description string    `xml:"description"`
+	Language    string    `xml:"language"`
+	Items       []rssItem `xml:"items"`
+}
+
+type rssMain struct {
+	XMLName xml.Name   `xml:"rss"`
+	Version string     `xml:"version,attr"`
+	Channel rssChannel `xml:"channel"`
+}
+
+func rssMainFromAuthor(author internal.Author) rssMain {
+	items := make([]rssItem, len(author.Books))
+	for i, b := range author.Books {
+		items[i] = rssItem{
+			Title:       b.Title,
+			Link:        b.URL,
+			GUID:        b.URL,
+			Description: "",
+		}
 	}
+	return rssMain{
+		Version: "2.0",
+		Channel: rssChannel{
+			Title:       author.Name,
+			Description: author.ShortDescription,
+			Link:        author.URL,
+			Items:       items,
+		},
+	}
+}
+
+func newHandler() http.Handler {
+	client := internal.NewLubimyCzytacClient(&http.Client{
+		Timeout: defaultLubimyCzytacClientTimeout,
+	})
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
 
-		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, r.URL.Path[1:], nil)
-		if err != nil || req.URL.Host != lubimyCzytacDomain {
-			w.WriteHeader(http.StatusBadRequest)
+		author, err := client.GetAuthor(r.Context(), r.URL.Path[1:])
+		if err == internal.ErrAuthorNotFound {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`author not found`))
 			return
 		}
-
-		resp, err := client.Do(req)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		defer func() {
-			_ = resp.Body.Close()
-		}()
-
-		p, err := newAuthorPageParser(resp.Body)
-		if err != nil {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`something went wrong while getting author info: ` + err.Error()))
 			return
 		}
 
 		w.Header().Set("Content-Type", "text/xml; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		if err := xml.NewEncoder(w).Encode(rssMain{
-			Version: "2.0",
-			Channel: rssChannel{
-				Link:  req.URL.String(),
-				Items: p.items(req.URL),
-			},
-		}); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
+		_ = xml.NewEncoder(w).Encode(rssMainFromAuthor(author))
 	})
-}
-
-type authorPageParser struct {
-	doc *goquery.Document
-}
-
-func newAuthorPageParser(r io.Reader) (authorPageParser, error) {
-	doc, err := goquery.NewDocumentFromReader(r)
-	if err != nil {
-		return authorPageParser{}, fmt.Errorf("goquery.NewDocumentFromReader: %w", err)
-	}
-	return authorPageParser{
-		doc: doc,
-	}, nil
-}
-
-func (p authorPageParser) items(baseURL *url.URL) []rssItem {
-	booksSel := p.doc.Find("#authorBooks .authorAllBooks__single")
-	items := make([]rssItem, booksSel.Length())
-	booksSel.Each(func(i int, selection *goquery.Selection) {
-		link := url.URL{
-			Scheme: baseURL.Scheme,
-			Host:   baseURL.Host,
-			Path:   selection.Find(".authorAllBooks__singleTextTitle").AttrOr("href", ""),
-		}
-		linkStr := link.String()
-		title := strings.TrimSpace(selection.Find(".authorAllBooks__singleTextTitle").Text())
-		items[i] = rssItem{
-			Title:       title,
-			Link:        linkStr,
-			GUID:        linkStr,
-			Description: "",
-		}
-	})
-	return items
 }
