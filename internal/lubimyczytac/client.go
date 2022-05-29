@@ -1,4 +1,4 @@
-package internal
+package lubimyczytac
 
 import (
 	"context"
@@ -6,13 +6,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
 )
 
 const (
-	lubimyCzytacBaseURL = "https://lubimyczytac.pl"
+	defaultBaseURL = "https://lubimyczytac.pl"
 )
 
 var (
@@ -26,25 +27,39 @@ type Book struct {
 }
 
 type Author struct {
+	ID               string
 	Name             string
 	ShortDescription string
 	URL              string
 	Books            []Book
 }
 
-type LubimyCzytacClient struct {
-	http *http.Client
+type Client struct {
+	http    *http.Client
+	baseURL string
 }
 
-func NewLubimyCzytacClient(client *http.Client) *LubimyCzytacClient {
-	return &LubimyCzytacClient{http: client}
+type ClientOption func(c *Client)
+
+func WithBaseURL(baseURL string) ClientOption {
+	return func(c *Client) {
+		c.baseURL = baseURL
+	}
 }
 
-func (c *LubimyCzytacClient) GetAuthor(ctx context.Context, authorID string) (Author, error) {
+func NewClient(client *http.Client, opts ...ClientOption) *Client {
+	c := &Client{http: client, baseURL: defaultBaseURL}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
+}
+
+func (c *Client) GetAuthor(ctx context.Context, id string) (Author, error) {
 	req, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodGet,
-		fmt.Sprintf("%s/autor/%s/x", lubimyCzytacBaseURL, authorID),
+		fmt.Sprintf("%s/autor/%s/x", c.baseURL, id),
 		nil,
 	)
 	if err != nil {
@@ -73,6 +88,7 @@ func (c *LubimyCzytacClient) GetAuthor(ctx context.Context, authorID string) (Au
 	}
 
 	return Author{
+		ID:               id,
 		Name:             p.name(),
 		ShortDescription: p.shortDescription(),
 		URL:              p.url(),
@@ -81,7 +97,8 @@ func (c *LubimyCzytacClient) GetAuthor(ctx context.Context, authorID string) (Au
 }
 
 type authorPageParser struct {
-	doc *goquery.Document
+	doc     *goquery.Document
+	baseURL *url.URL
 }
 
 func newAuthorPageParser(r io.Reader) (authorPageParser, error) {
@@ -89,8 +106,13 @@ func newAuthorPageParser(r io.Reader) (authorPageParser, error) {
 	if err != nil {
 		return authorPageParser{}, fmt.Errorf("goquery.NewDocumentFromReader: %w", err)
 	}
+	baseURL, err := url.Parse(doc.Find("head base").AttrOr("href", ""))
+	if err != nil {
+		return authorPageParser{}, fmt.Errorf("url.Parse: %w", err)
+	}
 	return authorPageParser{
-		doc: doc,
+		doc:     doc,
+		baseURL: baseURL,
 	}, nil
 }
 
@@ -110,9 +132,14 @@ func (p authorPageParser) books() []Book {
 	booksSel := p.doc.Find("#authorBooks .authorAllBooks__single")
 	books := make([]Book, booksSel.Length())
 	booksSel.Each(func(i int, selection *goquery.Selection) {
+		bookUrl := url.URL{
+			Scheme: p.baseURL.Scheme,
+			Host:   p.baseURL.Host,
+			Path:   selection.Find(".authorAllBooks__singleTextTitle").AttrOr("href", ""),
+		}
 		books[i] = Book{
 			Title: strings.TrimSpace(selection.Find(".authorAllBooks__singleTextTitle").Text()),
-			URL:   lubimyCzytacBaseURL + selection.Find(".authorAllBooks__singleTextTitle").AttrOr("href", ""),
+			URL:   bookUrl.String(),
 		}
 	})
 	return books

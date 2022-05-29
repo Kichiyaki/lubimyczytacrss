@@ -9,17 +9,35 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/Kichiyaki/lubimyczytacrss/internal"
+	"github.com/go-chi/chi/v5/middleware"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/Kichiyaki/lubimyczytacrss/internal/lubimyczytac"
 )
 
 const (
-	defaultLubimyCzytacClientTimeout = 5 * time.Second
+	defaultClientTimeout = 5 * time.Second
 )
 
 func main() {
+	r := chi.NewRouter()
+	r.Use(
+		middleware.RealIP,
+		middleware.RequestLogger(&middleware.DefaultLogFormatter{
+			NoColor: true,
+			Logger:  log.Default(),
+		}),
+		middleware.Recoverer,
+		middleware.Heartbeat("/health"),
+	)
+	newHandler(lubimyczytac.NewClient(&http.Client{
+		Timeout: defaultClientTimeout,
+	})).register(r)
+
 	httpSrv := &http.Server{
 		Addr:              ":9234",
-		Handler:           newHandler(),
+		Handler:           r,
 		ReadTimeout:       2 * time.Second,
 		ReadHeaderTimeout: 2 * time.Second,
 		WriteTimeout:      2 * time.Second,
@@ -42,7 +60,7 @@ func main() {
 	ctxShutdown, cancelCtxShutdown := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelCtxShutdown()
 	if err := httpSrv.Shutdown(ctxShutdown); err != nil {
-		log.Fatalln("httpSrv.Shutdown:", err)
+		log.Println("httpSrv.Shutdown:", err)
 	}
 }
 
@@ -54,6 +72,19 @@ type rssItem struct {
 	Description string   `xml:"description"`
 }
 
+func rssItemsFromBooks(books []lubimyczytac.Book) []rssItem {
+	items := make([]rssItem, len(books))
+	for i, b := range books {
+		items[i] = rssItem{
+			Title:       b.Title,
+			Link:        b.URL,
+			GUID:        b.URL,
+			Description: "",
+		}
+	}
+	return items
+}
+
 type rssChannel struct {
 	XMLName     xml.Name  `xml:"channel"`
 	Title       string    `xml:"title"`
@@ -63,58 +94,56 @@ type rssChannel struct {
 	Items       []rssItem `xml:"items"`
 }
 
+func rssChannelFromAuthor(author lubimyczytac.Author) rssChannel {
+	return rssChannel{
+		Title:       author.Name,
+		Description: author.ShortDescription,
+		Link:        author.URL,
+		Items:       rssItemsFromBooks(author.Books),
+	}
+}
+
 type rssMain struct {
 	XMLName xml.Name   `xml:"rss"`
 	Version string     `xml:"version,attr"`
 	Channel rssChannel `xml:"channel"`
 }
 
-func rssMainFromAuthor(author internal.Author) rssMain {
-	items := make([]rssItem, len(author.Books))
-	for i, b := range author.Books {
-		items[i] = rssItem{
-			Title:       b.Title,
-			Link:        b.URL,
-			GUID:        b.URL,
-			Description: "",
-		}
-	}
+func rssMainFromAuthor(author lubimyczytac.Author) rssMain {
 	return rssMain{
 		Version: "2.0",
-		Channel: rssChannel{
-			Title:       author.Name,
-			Description: author.ShortDescription,
-			Link:        author.URL,
-			Items:       items,
-		},
+		Channel: rssChannelFromAuthor(author),
 	}
 }
 
-func newHandler() http.Handler {
-	client := internal.NewLubimyCzytacClient(&http.Client{
-		Timeout: defaultLubimyCzytacClientTimeout,
-	})
+type handler struct {
+	client *lubimyczytac.Client
+}
 
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
+func newHandler(client *lubimyczytac.Client) *handler {
+	return &handler{client: client}
+}
 
-		author, err := client.GetAuthor(r.Context(), r.URL.Path[1:])
-		if err == internal.ErrAuthorNotFound {
-			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte(`author not found`))
-			return
-		}
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			_, _ = w.Write([]byte(`something went wrong while getting author info: ` + err.Error()))
-			return
-		}
+func (h *handler) register(r chi.Router) {
+	r.Get("/api/v1/rss/author/{authorID}", h.getRSSAuthor)
+}
 
-		w.Header().Set("Content-Type", "text/xml; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		_ = xml.NewEncoder(w).Encode(rssMainFromAuthor(author))
-	})
+func (h *handler) getRSSAuthor(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	author, err := h.client.GetAuthor(ctx, chi.URLParamFromCtx(ctx, "authorID"))
+	if err == lubimyczytac.ErrAuthorNotFound {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`author not found`))
+		return
+	}
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`something went wrong while getting author info: ` + err.Error()))
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/xml; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_ = xml.NewEncoder(w).Encode(rssMainFromAuthor(author))
 }
