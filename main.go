@@ -18,12 +18,12 @@ import (
 )
 
 const (
-	defaultClientTimeout = 5 * time.Second
+	clientTimeout = 5 * time.Second
 )
 
 func main() {
 	httpSrv := newServer(newRouter(lubimyczytac.NewClient(&http.Client{
-		Timeout: defaultClientTimeout,
+		Timeout: clientTimeout,
 	})))
 
 	go func(httpSrv *http.Server) {

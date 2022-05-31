@@ -27,8 +27,12 @@ func TestClient_GetAuthor(t *testing.T) {
 				t.Parallel()
 
 				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if r.URL.Path != fmt.Sprintf("/autor/%s/x", author.ID) || r.Method != http.MethodGet {
-						w.WriteHeader(http.StatusBadRequest)
+					if r.URL.Path != fmt.Sprintf("/autor/%s/x", author.ID) {
+						w.WriteHeader(http.StatusNotFound)
+						return
+					}
+					if r.Method != http.MethodGet {
+						w.WriteHeader(http.StatusMethodNotAllowed)
 						return
 					}
 
@@ -44,5 +48,20 @@ func TestClient_GetAuthor(t *testing.T) {
 				assert.Equal(t, author.Author, result)
 			})
 		}
+	})
+
+	t.Run("ERR: author not found", func(t *testing.T) {
+		t.Parallel()
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer srv.Close()
+
+		result, err := lubimyczytac.
+			NewClient(srv.Client(), lubimyczytac.WithBaseURL(srv.URL)).
+			GetAuthor(context.Background(), "123")
+		assert.ErrorIs(t, err, lubimyczytac.ErrAuthorNotFound)
+		assert.Zero(t, result)
 	})
 }
