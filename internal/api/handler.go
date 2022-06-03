@@ -17,7 +17,7 @@ func NewHandler(client *lubimyczytac.Client) *Handler {
 }
 
 func (h *Handler) Register(r chi.Router) {
-	r.Get("/api/v1/rss/author/{authorID}", h.getRSSAuthor)
+	r.Get("/api/v1/rss/authors/{authorID}", h.getRSSAuthor)
 }
 
 func (h *Handler) getRSSAuthor(w http.ResponseWriter, r *http.Request) {
