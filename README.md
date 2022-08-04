@@ -30,4 +30,4 @@ services:
 
 ### GET /api/v1/rss/authors/{authorID}
 
-Returns an RSS feed of the newest books written by an author with a given ID and added to [lubimyczytac.pl](https://lubimyczytac.pl).
+Returns the RSS feed of the newest books written by the author with the given ID.
