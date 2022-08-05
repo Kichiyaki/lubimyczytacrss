@@ -6,7 +6,7 @@ on:
   pull_request:
 
 env:
-  GO_VERSION: 1.18.x
+  GO_VERSION: 1.19.x
 
 jobs:
   go-mod:
@@ -21,6 +21,7 @@ jobs:
         run: |
           go mod tidy
           git diff --exit-code go.mod
+
   golangci-lint:
     runs-on: ubuntu-latest
     steps:
@@ -32,12 +33,12 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v3
         with:
-          version: v1.46
+          version: v1.48
 
   tests:
     strategy:
       matrix:
-        go: [ 1.18.x ]
+        go: [ 1.19.x ]
         platform: [ ubuntu-latest ]
     runs-on: ${{ matrix.platform }}
     steps:
